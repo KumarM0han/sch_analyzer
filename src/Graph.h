@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Forward declarations
@@ -37,6 +38,14 @@ struct Rect {
 enum class PortType {
   Input, // Left side
   Output // Right side
+};
+
+enum class LayoutAlgorithm { Sugiyama, Orthogonal };
+
+struct LayoutState {
+  bool is_cached = false;
+  std::vector<Rect> node_bounds;
+  std::vector<std::vector<Vec2>> edge_waypoints;
 };
 
 template <typename NodeData, typename EdgeData, typename PortData> class Port {
@@ -216,15 +225,44 @@ private:
 
 public:
   bool global_hide_all = false;
+  LayoutAlgorithm current_layout = LayoutAlgorithm::Sugiyama;
+  std::unordered_map<LayoutAlgorithm, LayoutState> layout_cache;
 
   Graph() {
     quadtree = std::make_unique<Quadtree<NodeData, EdgeData, PortData>>(
         0, Rect{-100000.0f, -100000.0f, 200000.0f, 200000.0f}, *this);
   }
 
-  void reresolveQuadtree(float width, float height) {
+  void rebuildQuadtree() {
+    if (nodes.empty())
+      return;
+
+    float min_x = nodes[0].bounds.x;
+    float min_y = nodes[0].bounds.y;
+    float max_x = nodes[0].bounds.x + nodes[0].bounds.w;
+    float max_y = nodes[0].bounds.y + nodes[0].bounds.h;
+
+    for (size_t i = 1; i < nodes.size(); ++i) {
+      const auto &node = nodes[i];
+      if (node.bounds.x < min_x)
+        min_x = node.bounds.x;
+      if (node.bounds.y < min_y)
+        min_y = node.bounds.y;
+      if (node.bounds.x + node.bounds.w > max_x)
+        max_x = node.bounds.x + node.bounds.w;
+      if (node.bounds.y + node.bounds.h > max_y)
+        max_y = node.bounds.y + node.bounds.h;
+    }
+
+    // Add padding to bounds
+    min_x -= 1000.0f;
+    min_y -= 1000.0f;
+    max_x += 1000.0f;
+    max_y += 1000.0f;
+
     quadtree = std::make_unique<Quadtree<NodeData, EdgeData, PortData>>(
-        0, Rect{-width / 2, -height / 2, width, height}, *this);
+        0, Rect{min_x, min_y, max_x - min_x, max_y - min_y}, *this);
+
     for (const auto &node : nodes) {
       quadtree->insert(node.id, node.bounds);
     }
@@ -291,5 +329,36 @@ public:
       }
     }
     return exact_ids;
+  }
+
+  void saveLayoutToCache(LayoutAlgorithm algo) {
+    LayoutState state;
+    state.is_cached = true;
+    state.node_bounds.resize(nodes.size());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      state.node_bounds[i] = nodes[i].bounds;
+    }
+    state.edge_waypoints.resize(edges.size());
+    for (size_t i = 0; i < edges.size(); ++i) {
+      state.edge_waypoints[i] = edges[i].waypoints;
+    }
+    layout_cache[algo] = state;
+  }
+
+  bool loadLayoutFromCache(LayoutAlgorithm algo) {
+    if (layout_cache.find(algo) != layout_cache.end() &&
+        layout_cache[algo].is_cached) {
+      const auto &state = layout_cache[algo];
+      for (size_t i = 0; i < nodes.size(); ++i) {
+        nodes[i].bounds = state.node_bounds[i];
+      }
+      for (size_t i = 0; i < edges.size(); ++i) {
+        edges[i].waypoints = state.edge_waypoints[i];
+      }
+      rebuildQuadtree();
+      current_layout = algo;
+      return true;
+    }
+    return false;
   }
 };

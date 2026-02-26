@@ -64,7 +64,7 @@ void test_manhattan_layout() {
 
   g.addEdge(n1, p1, n2, p2, {1.0f});
 
-  Layout::applyManhattanLayout(g);
+  Layout::applyOGDFLayout(g);
 
   // Check nodes are separated
   assert(g.getNode(n1).bounds.x != g.getNode(n2).bounds.x ||

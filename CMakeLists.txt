@@ -4,6 +4,16 @@ project(analyzer CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(FetchContent)
+FetchContent_Declare(
+  ogdf
+  GIT_REPOSITORY https://github.com/ogdf/ogdf.git
+  GIT_TAG        master
+)
+set(OGDF_BUILD_TESTS OFF CACHE BOOL "Disable OGDF tests" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build OGDF as static libraries" FORCE)
+FetchContent_MakeAvailable(ogdf)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(IMGUI_SOURCES
@@ -28,7 +38,10 @@ endif()
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
         ${SDL3_LIB_PATH}
+        OGDF
 )
+
+target_link_libraries(test_graph PUBLIC OGDF)
 
 get_filename_component(SDL_LIB_DIR "${SDL3_LIB_PATH}" DIRECTORY)
 set_target_properties(${PROJECT_NAME} PROPERTIES

@@ -35,21 +35,57 @@ struct MyPortData {
   std::string pin_name;
 };
 
-void RenderNodeProps(const MyNodeData &data) {
-  ImGui::Text("Cell Name: %s", data.name.c_str());
-  ImGui::Text("Cell Type: %s", data.cell_type.c_str());
+using GraphType = Graph<MyNodeData, MyEdgeData, MyPortData>;
+
+void RenderNodeProps(const Node<MyNodeData, MyEdgeData, MyPortData> &node,
+                     const GraphType &graph) {
+  ImGui::Text("Cell Name: %s", node.data.name.c_str());
+  ImGui::Text("Cell Type: %s", node.data.cell_type.c_str());
+
+  if (ImGui::TreeNode("Pins")) {
+    for (const auto &port : node.ports) {
+      ImGui::BulletText("%s (%s)", port.data.pin_name.c_str(),
+                        port.type == PortType::Input ? "IN" : "OUT");
+    }
+    ImGui::TreePop();
+  }
 }
-void RenderEdgeProps(const MyEdgeData &data) {
-  ImGui::Text("Net: %s", data.net_name.c_str());
-  ImGui::Text("Capacitance: %.2f fF", data.capacitance);
+
+void RenderEdgeProps(const Edge<MyNodeData, MyEdgeData, MyPortData> &edge,
+                     const GraphType &graph) {
+  ImGui::Text("Net Name: %s", edge.data.net_name.c_str());
+  ImGui::Text("Capacitance: %.2f fF", edge.data.capacitance);
+
+  ImGui::Separator();
+  const auto &src_node = graph.getNode(edge.src_node_id);
+  const auto &sink_node = graph.getNode(edge.dst_node_id);
+  ImGui::Text("Source Cell: %s", src_node.data.name.c_str());
+  ImGui::Text("Sink Cell:   %s", sink_node.data.name.c_str());
 }
-void RenderPortProps(const MyPortData &data) {
-  ImGui::Text("Pin Name: %s", data.pin_name.c_str());
+
+void RenderPortProps(const Port<MyNodeData, MyEdgeData, MyPortData> &port,
+                     const Node<MyNodeData, MyEdgeData, MyPortData> &owner,
+                     const GraphType &graph) {
+  ImGui::Text("Pin Name: %s", port.data.pin_name.c_str());
+  ImGui::Text("Direction: %s",
+              port.type == PortType::Input ? "Input" : "Output");
+  ImGui::Text("Owning Cell: %s", owner.data.name.c_str());
+
+  if (!port.connected_edge_ids.empty()) {
+    ImGui::Separator();
+    ImGui::Text("Connected Nets:");
+    for (int eid : port.connected_edge_ids) {
+      const auto &edge = graph.getEdge(eid);
+      const auto &src_node = graph.getNode(edge.src_node_id);
+      ImGui::BulletText("%s (from %s)", edge.data.net_name.c_str(),
+                        src_node.data.name.c_str());
+    }
+  }
 }
 
 // ... inside main()
 
-int main(int, char **) {
+int main(int argc, char **argv) {
   // Setup SDL
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("Error: SDL_Init(): %s\n", SDL_GetError());
@@ -91,7 +127,7 @@ int main(int, char **) {
   Graph<MyNodeData, MyEdgeData, MyPortData> graph;
 
   printf("Loading Graph Data...\n");
-  int num_nodes = 5000;
+  int num_nodes = (argc == 1) ? 1000 : atoi(argv[1]);
 
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -132,7 +168,8 @@ int main(int, char **) {
   }
 
   printf("Applying Layout...\n");
-  Layout::applyManhattanLayout(graph);
+  Layout::applyOGDFLayout(graph);
+  graph.rebuildQuadtree();
 
   GraphRenderer<MyNodeData, MyEdgeData, MyPortData> graphRenderer(graph);
 

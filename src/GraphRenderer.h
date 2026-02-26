@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Graph.h"
+#include "Layout.h"
 #include "imgui.h"
 #include <cmath>
 #include <string>
@@ -58,11 +59,12 @@ private:
   // Config colors
   ImU32 col_bg = IM_COL32(30, 30, 30, 255);
   ImU32 col_grid = IM_COL32(200, 200, 200, 40);
-  ImU32 col_node = IM_COL32(60, 60, 60, 255);
-  ImU32 col_node_selected = IM_COL32(100, 100, 200, 255);
-  ImU32 col_node_border = IM_COL32(150, 150, 150, 255);
-  ImU32 col_port = IM_COL32(200, 150, 50, 255);
-  ImU32 col_edge = IM_COL32(150, 150, 150, 255);
+  ImU32 col_node = IM_COL32(70, 75, 80, 255);
+  ImU32 col_node_selected = IM_COL32(200, 150, 50, 255);
+  ImU32 col_node_border = IM_COL32(180, 180, 180, 255);
+  ImU32 col_port = IM_COL32(150, 200, 150, 255);
+  ImU32 col_edge = IM_COL32(170, 170, 170, 255);
+  ImU32 col_edge_selected = IM_COL32(255, 100, 50, 255);
 
   bool isDraggingEmpty = false;
 
@@ -89,6 +91,24 @@ public:
         if (ImGui::MenuItem("Reset View")) {
           camera.pan = {0.0f, 0.0f};
           camera.zoom = 1.0f;
+        }
+        ImGui::Separator();
+        // Layout algorithm toggle
+        bool isOrtho = (graph.current_layout == LayoutAlgorithm::Orthogonal);
+        if (ImGui::MenuItem("Orthogonal Layout", nullptr, isOrtho)) {
+          if (!graph.loadLayoutFromCache(LayoutAlgorithm::Orthogonal)) {
+            graph.current_layout = LayoutAlgorithm::Orthogonal;
+            Layout::applyOGDFLayout(graph);
+            graph.saveLayoutToCache(LayoutAlgorithm::Orthogonal);
+          }
+        }
+        bool isSugi = (graph.current_layout == LayoutAlgorithm::Sugiyama);
+        if (ImGui::MenuItem("Sugiyama Layout", nullptr, isSugi)) {
+          if (!graph.loadLayoutFromCache(LayoutAlgorithm::Sugiyama)) {
+            graph.current_layout = LayoutAlgorithm::Sugiyama;
+            Layout::applyOGDFLayout(graph);
+            graph.saveLayoutToCache(LayoutAlgorithm::Sugiyama);
+          }
         }
         ImGui::EndMenu();
       }
@@ -158,11 +178,18 @@ public:
     std::vector<int> visibleNodes = graph.queryVisibleNodes(worldBounds);
 
     // Handle Interactions on Nodes
-    if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-      selection.clear();
+    bool mouse_clicked_left = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    bool mouse_clicked_right = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+
+    if (is_hovered && (mouse_clicked_left || mouse_clicked_right)) {
+      if (mouse_clicked_left) {
+        selection.clear();
+      } // Right click doesn't clear selection unless we hit something else, or
+        // maybe it should.
+
       Vec2 mouse_pos = {io.MousePos.x - canvas_p0.x,
                         io.MousePos.y - canvas_p0.y};
-      float hit_radius = 8.0f; // pixel radius for click targets
+      float hit_radius = 16.0f; // pixel radius for click targets
 
       bool entityClicked = false;
 
@@ -181,10 +208,20 @@ public:
             selection.data = (void *)&port.data;
             entityClicked = true;
 
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            if (mouse_clicked_right) {
+              ImGui::OpenPopup("PortContextMenu");
+            } else if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+              // If it's an input port, we want to toggle all incoming edges.
+              // If output port, toggle all outgoing edges.
+              bool any_hidden = false;
+              for (int edge_id : port.connected_edge_ids) {
+                if (!graph.getEdge(edge_id).visible)
+                  any_hidden = true;
+              }
               for (int edge_id : port.connected_edge_ids) {
                 graph.getEdge(edge_id).visible =
-                    !graph.getEdge(edge_id).visible;
+                    any_hidden; // Make all visible if any was hidden, else hide
+                                // all
               }
             }
             break;
@@ -211,7 +248,7 @@ public:
 
       // 3. Check Edges (if no port or node was clicked)
       if (!entityClicked) {
-        float edge_hit_req_sq = 25.0f; // 5 pixels squared tolerance
+        float edge_hit_req_sq = 100.0f; // 10 pixels squared tolerance
         for (const auto &edge : graph.getEdges()) {
           if (!edge.visible && !graph.global_hide_all)
             continue;
@@ -241,6 +278,59 @@ public:
       }
     }
 
+    // Render Context Menus
+    if (ImGui::BeginPopup("PortContextMenu")) {
+      if (selection.type == SelectionType::Port) {
+        ImGui::Text("Jump to Connected Node:");
+        ImGui::Separator();
+
+        bool has_links = false;
+        // Re-find the port
+        bool port_found = false;
+        const Port<NodeData, EdgeData, PortData> *p = nullptr;
+        for (const auto &n : graph.getNodes()) {
+          for (const auto &port : n.ports) {
+            if (port.id == selection.id) {
+              p = &port;
+              port_found = true;
+              break;
+            }
+          }
+          if (port_found)
+            break;
+        }
+
+        if (p) {
+          for (int edge_id : p->connected_edge_ids) {
+            has_links = true;
+            const auto &edge = graph.getEdge(edge_id);
+            int target_node_id = (p->type == PortType::Output)
+                                     ? edge.dst_node_id
+                                     : edge.src_node_id;
+            std::string label = "Go to Node " + std::to_string(target_node_id);
+            if (ImGui::MenuItem(label.c_str())) {
+              // Jump Camera
+              const auto &target_node = graph.getNode(target_node_id);
+              camera.pan.x = -target_node.bounds.x * camera.zoom +
+                             (canvas_p1.x - canvas_p0.x) / 2.0f;
+              camera.pan.y = -target_node.bounds.y * camera.zoom +
+                             (canvas_p1.y - canvas_p0.y) / 2.0f;
+
+              // Select target node
+              selection.type = SelectionType::Node;
+              selection.id = target_node_id;
+              selection.data = (void *)&target_node.data;
+            }
+          }
+        }
+
+        if (!has_links) {
+          ImGui::TextDisabled("No connected edges.");
+        }
+      }
+      ImGui::EndPopup();
+    }
+
     // Render Edges
     for (const auto &edge : graph.getEdges()) {
       if (!edge.visible && !graph.global_hide_all)
@@ -256,8 +346,16 @@ public:
             ImVec2(canvas_p0.x + screenPos.x, canvas_p0.y + screenPos.y);
       }
       if (pt_count > 1) {
-        draw_list->AddPolyline(points, pt_count, col_edge, 0,
-                               2.0f * camera.zoom);
+        ImU32 draw_color =
+            (selection.type == SelectionType::Edge && selection.id == edge.id)
+                ? col_edge_selected
+                : col_edge;
+        float thickness =
+            (selection.type == SelectionType::Edge && selection.id == edge.id)
+                ? 4.0f
+                : 2.5f;
+        draw_list->AddPolyline(points, pt_count, draw_color, 0,
+                               thickness * camera.zoom);
       }
     }
 
@@ -302,10 +400,15 @@ public:
 
   // Abstract property rendering depending on the data type using an external
   // callback or specialized function
-  void renderPropertiesPanel(void (*renderNodeData)(const NodeData &),
-                             void (*renderEdgeData)(const EdgeData &),
-                             void (*renderPortData)(const PortData &),
-                             size_t visibleNodeCount) {
+  void renderPropertiesPanel(
+      void (*renderNodeData)(const Node<NodeData, EdgeData, PortData> &,
+                             const Graph<NodeData, EdgeData, PortData> &),
+      void (*renderEdgeData)(const Edge<NodeData, EdgeData, PortData> &,
+                             const Graph<NodeData, EdgeData, PortData> &),
+      void (*renderPortData)(const Port<NodeData, EdgeData, PortData> &,
+                             const Node<NodeData, EdgeData, PortData> &,
+                             const Graph<NodeData, EdgeData, PortData> &),
+      size_t visibleNodeCount) {
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 320.0f,
@@ -316,21 +419,25 @@ public:
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings);
 
-    if (ImGui::Button("Reset View", ImVec2(-FLT_MIN, 30.0f))) {
-      camera.pan = {0.0f, 0.0f};
-      camera.zoom = 1.0f;
-    }
-    ImGui::Separator();
-
     if (selection.type == SelectionType::Node && selection.data) {
+      const auto &node = graph.getNode(selection.id);
       ImGui::Text("Selected: Node %d", selection.id);
-      renderNodeData(*(NodeData *)selection.data);
+      renderNodeData(node, graph);
     } else if (selection.type == SelectionType::Edge && selection.data) {
+      const auto &edge = graph.getEdge(selection.id);
       ImGui::Text("Selected: Edge %d", selection.id);
-      renderEdgeData(*(EdgeData *)selection.data);
+      renderEdgeData(edge, graph);
     } else if (selection.type == SelectionType::Port && selection.data) {
-      ImGui::Text("Selected: Port %d", selection.id);
-      renderPortData(*(PortData *)selection.data);
+      // Find owning node to pass it cleanly
+      for (const auto &node : graph.getNodes()) {
+        for (const auto &port : node.ports) {
+          if (port.id == selection.id) {
+            ImGui::Text("Selected: Port %d", selection.id);
+            renderPortData(port, node, graph);
+            break;
+          }
+        }
+      }
     } else {
       ImGui::Text("No entity selected.");
     }
