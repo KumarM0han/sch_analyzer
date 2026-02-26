@@ -17,6 +17,7 @@ set(IMGUI_SOURCES
 )
 
 add_executable(${PROJECT_NAME} src/main.cpp ${IMGUI_SOURCES})
+add_executable(test_graph src/test_graph.cpp)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/libSDL3.so")
