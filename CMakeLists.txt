@@ -29,10 +29,18 @@ set(IMGUI_SOURCES
 add_executable(${PROJECT_NAME} src/main.cpp ${IMGUI_SOURCES})
 add_executable(test_graph src/test_graph.cpp)
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/libSDL3.so")
+if(WIN32)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/SDL3.lib")
+    else()
+        set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/SDL3.lib")
+    endif()
 else()
-    set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/libSDL3.so")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/libSDL3.so")
+    else()
+        set(SDL3_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/libSDL3.so")
+    endif()
 endif()
 
 target_link_libraries(${PROJECT_NAME}
@@ -49,11 +57,19 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     INSTALL_RPATH "${SDL_LIB_DIR}"
 )
 
-target_link_libraries(${PROJECT_NAME}
-    PRIVATE
-        $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/libSDL3.so>
-        $<$<CONFIG:Release>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/libSDL3.so>
-)
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+            $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/SDL3.lib>
+            $<$<CONFIG:Release>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/SDL3.lib>
+    )
+else()
+    target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+            $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/debug/libSDL3.so>
+            $<$<CONFIG:Release>:${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL/release/libSDL3.so>
+    )
+endif()
 
 target_include_directories(${PROJECT_NAME}
     PRIVATE 
