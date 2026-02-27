@@ -79,7 +79,7 @@ public:
        const EdgeData &data)
       : id(id), src_node_id(src_node), src_port_id(src_port),
         dst_node_id(dst_node), dst_port_id(dst_port), data(data),
-        visible(false) {}
+        visible(true) {}
 };
 
 template <typename NodeData, typename EdgeData, typename PortData> class Node {
