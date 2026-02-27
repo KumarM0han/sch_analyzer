@@ -40,7 +40,7 @@ enum class PortType {
   Output // Right side
 };
 
-enum class LayoutAlgorithm { Sugiyama, Orthogonal };
+enum class LayoutAlgorithm { Sugiyama, Orthogonal, FMMM };
 
 struct LayoutState {
   bool is_cached = false;
@@ -108,6 +108,7 @@ private:
   int level;
   Rect bounds;
   std::vector<int> node_ids; // Store Node IDs instead of pointers
+  std::vector<int> edge_ids; // Store Edge IDs for culling
   std::unique_ptr<Quadtree> nodes[4];
   Graph<NodeData, EdgeData, PortData> &graph;
 
@@ -158,6 +159,7 @@ public:
 
   void clear() {
     node_ids.clear();
+    edge_ids.clear();
     for (int i = 0; i < 4; i++) {
       if (nodes[i]) {
         nodes[i]->clear();
@@ -192,24 +194,68 @@ public:
           i++;
         }
       }
+
+      i = 0;
+      // also re-distribute edge_ids
+      while (i < edge_ids.size()) {
+        const auto &edge = graph.getEdge(edge_ids[i]);
+        Rect edgeBounds = {edge.waypoints[0].x, edge.waypoints[0].y, 0, 0};
+        for (const auto &wp : edge.waypoints) {
+          if (wp.x < edgeBounds.x) {
+            edgeBounds.w += edgeBounds.x - wp.x;
+            edgeBounds.x = wp.x;
+          } else if (wp.x > edgeBounds.x + edgeBounds.w)
+            edgeBounds.w = wp.x - edgeBounds.x;
+          if (wp.y < edgeBounds.y) {
+            edgeBounds.h += edgeBounds.y - wp.y;
+            edgeBounds.y = wp.y;
+          } else if (wp.y > edgeBounds.y + edgeBounds.h)
+            edgeBounds.h = wp.y - edgeBounds.y;
+        }
+        int index = getIndex(edgeBounds);
+        if (index != -1) {
+          nodes[index]->insertEdge(edge_ids[i], edgeBounds);
+          edge_ids.erase(edge_ids.begin() + i);
+        } else {
+          i++;
+        }
+      }
     }
   }
 
-  void retrieve(std::vector<int> &returnObjects, const Rect &pRect) const {
+  void insertEdge(int edge_id, const Rect &pRect) {
+    if (nodes[0]) {
+      int index = getIndex(pRect);
+      if (index != -1) {
+        nodes[index]->insertEdge(edge_id, pRect);
+        return;
+      }
+    }
+    edge_ids.push_back(edge_id);
+    // Max capacity triggers split but we'll re-distribute nodes and edges in
+    // insert just piggy back onto node limits for simplicity since edges follow
+    // nodes closely
+  }
+
+  void retrieve(std::vector<int> &returnNodes, std::vector<int> &returnEdges,
+                const Rect &pRect) const {
     int index = getIndex(pRect);
     if (index != -1 && nodes[0]) {
-      nodes[index]->retrieve(returnObjects, pRect);
+      nodes[index]->retrieve(returnNodes, returnEdges, pRect);
     } else if (nodes[0]) {
       // Need to check all children if it overlaps multiple quadrants
       for (int i = 0; i < 4; i++) {
         if (pRect.intersects(nodes[i]->bounds)) {
-          nodes[i]->retrieve(returnObjects, pRect);
+          nodes[i]->retrieve(returnNodes, returnEdges, pRect);
         }
       }
     }
 
     for (int id : node_ids) {
-      returnObjects.push_back(id);
+      returnNodes.push_back(id);
+    }
+    for (int id : edge_ids) {
+      returnEdges.push_back(id);
     }
   }
 };
@@ -225,7 +271,7 @@ private:
 
 public:
   bool global_hide_all = false;
-  LayoutAlgorithm current_layout = LayoutAlgorithm::Sugiyama;
+  LayoutAlgorithm current_layout = LayoutAlgorithm::FMMM;
   std::unordered_map<LayoutAlgorithm, LayoutState> layout_cache;
 
   Graph() {
@@ -265,6 +311,24 @@ public:
 
     for (const auto &node : nodes) {
       quadtree->insert(node.id, node.bounds);
+    }
+    for (const auto &edge : edges) {
+      if (edge.waypoints.empty())
+        continue;
+      Rect edgeBounds = {edge.waypoints[0].x, edge.waypoints[0].y, 0, 0};
+      for (const auto &wp : edge.waypoints) {
+        if (wp.x < edgeBounds.x) {
+          edgeBounds.w += edgeBounds.x - wp.x;
+          edgeBounds.x = wp.x;
+        } else if (wp.x > edgeBounds.x + edgeBounds.w)
+          edgeBounds.w = wp.x - edgeBounds.x;
+        if (wp.y < edgeBounds.y) {
+          edgeBounds.h += edgeBounds.y - wp.y;
+          edgeBounds.y = wp.y;
+        } else if (wp.y > edgeBounds.y + edgeBounds.h)
+          edgeBounds.h = wp.y - edgeBounds.y;
+      }
+      quadtree->insertEdge(edge.id, edgeBounds);
     }
   }
 
@@ -316,12 +380,13 @@ public:
   std::vector<Edge<NodeData, EdgeData, PortData>> &getEdges() { return edges; }
 
   std::vector<int> queryVisibleNodes(const Rect &viewBounds) {
-    std::vector<int> visible_ids;
-    quadtree->retrieve(visible_ids, viewBounds);
+    std::vector<int> visible_nodes;
+    std::vector<int> visible_edges;
+    quadtree->retrieve(visible_nodes, visible_edges, viewBounds);
 
     // Filter out actual intersections since Quadtree retrieve is broad
     std::vector<int> exact_ids;
-    for (int id : visible_ids) {
+    for (int id : visible_nodes) {
       if (nodes[id].bounds.intersects(viewBounds)) {
         if (!global_hide_all || nodes[id].visible) {
           exact_ids.push_back(id);
@@ -329,6 +394,13 @@ public:
       }
     }
     return exact_ids;
+  }
+
+  std::vector<int> queryVisibleEdges(const Rect &viewBounds) {
+    std::vector<int> visible_nodes;
+    std::vector<int> visible_edges;
+    quadtree->retrieve(visible_nodes, visible_edges, viewBounds);
+    return visible_edges;
   }
 
   void saveLayoutToCache(LayoutAlgorithm algo) {

@@ -2,6 +2,7 @@
 #include "Layout.h"
 #include <cassert>
 #include <iostream>
+#include <memory>
 
 struct TestNodeData {
   int type_id;

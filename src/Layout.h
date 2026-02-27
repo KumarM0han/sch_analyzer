@@ -7,11 +7,13 @@
 
 #include <ogdf/basic/Graph.h>
 #include <ogdf/basic/GraphAttributes.h>
+#include <ogdf/energybased/FMMMLayout.h>
 #include <ogdf/layered/MedianHeuristic.h>
 #include <ogdf/layered/OptimalHierarchyLayout.h>
 #include <ogdf/layered/OptimalRanking.h>
 #include <ogdf/layered/SugiyamaLayout.h>
 #include <ogdf/planarity/PlanarizationLayout.h>
+
 
 namespace Layout {
 
@@ -73,6 +75,14 @@ void applyOGDFLayout(Graph<NodeData, EdgeData, PortData> &customGraph) {
 
     SL.setLayout(ohl);
     SL.call(GA);
+  } else if (customGraph.current_layout == LayoutAlgorithm::FMMM) {
+    ogdf::FMMMLayout fmmm;
+    fmmm.useHighLevelOptions(true);
+    fmmm.unitEdgeLength(50.0);
+    fmmm.newInitialPlacement(true);
+    fmmm.qualityVersusSpeed(
+        ogdf::FMMMOptions::QualityVsSpeed::GorgeousAndEfficient);
+    fmmm.call(GA);
   } else {
     // Set up Orthogonal Layout via Planarization
     ogdf::PlanarizationLayout PL;

@@ -110,6 +110,14 @@ public:
             graph.saveLayoutToCache(LayoutAlgorithm::Sugiyama);
           }
         }
+        bool isFMMM = (graph.current_layout == LayoutAlgorithm::FMMM);
+        if (ImGui::MenuItem("FMMM Layout", nullptr, isFMMM)) {
+          if (!graph.loadLayoutFromCache(LayoutAlgorithm::FMMM)) {
+            graph.current_layout = LayoutAlgorithm::FMMM;
+            Layout::applyOGDFLayout(graph);
+            graph.saveLayoutToCache(LayoutAlgorithm::FMMM);
+          }
+        }
         ImGui::EndMenu();
       }
       ImGui::EndMainMenuBar();
@@ -133,8 +141,6 @@ public:
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
     draw_list->AddRectFilled(canvas_p0, canvas_p1, col_bg);
-    drawGrid(draw_list, canvas_p0,
-             ImVec2(canvas_p1.x - canvas_p0.x, canvas_p1.y - canvas_p0.y));
 
     // --- Input Handling ---
     bool is_hovered = ImGui::IsWindowHovered();
@@ -176,6 +182,7 @@ public:
 
     // --- Culling & Rendering ---
     std::vector<int> visibleNodes = graph.queryVisibleNodes(worldBounds);
+    std::vector<int> visibleEdges = graph.queryVisibleEdges(worldBounds);
 
     // Handle Interactions on Nodes
     bool mouse_clicked_left = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -249,7 +256,8 @@ public:
       // 3. Check Edges (if no port or node was clicked)
       if (!entityClicked) {
         float edge_hit_req_sq = 100.0f; // 10 pixels squared tolerance
-        for (const auto &edge : graph.getEdges()) {
+        for (int edge_id : visibleEdges) {
+          const auto &edge = graph.getEdge(edge_id);
           if (!edge.visible && !graph.global_hide_all)
             continue;
 
@@ -332,7 +340,8 @@ public:
     }
 
     // Render Edges
-    for (const auto &edge : graph.getEdges()) {
+    for (int edge_id : visibleEdges) {
+      const auto &edge = graph.getEdge(edge_id);
       if (!edge.visible && !graph.global_hide_all)
         continue;
 
