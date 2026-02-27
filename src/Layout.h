@@ -8,12 +8,11 @@
 #include <ogdf/basic/Graph.h>
 #include <ogdf/basic/GraphAttributes.h>
 #include <ogdf/energybased/FMMMLayout.h>
+#include <ogdf/layered/FastHierarchyLayout.h>
 #include <ogdf/layered/MedianHeuristic.h>
 #include <ogdf/layered/OptimalHierarchyLayout.h>
 #include <ogdf/layered/OptimalRanking.h>
 #include <ogdf/layered/SugiyamaLayout.h>
-#include <ogdf/planarity/PlanarizationLayout.h>
-
 
 namespace Layout {
 
@@ -83,10 +82,18 @@ void applyOGDFLayout(Graph<NodeData, EdgeData, PortData> &customGraph) {
     fmmm.qualityVersusSpeed(
         ogdf::FMMMOptions::QualityVsSpeed::GorgeousAndEfficient);
     fmmm.call(GA);
-  } else {
-    // Set up Orthogonal Layout via Planarization
-    ogdf::PlanarizationLayout PL;
-    PL.call(GA);
+  } else if (customGraph.current_layout == LayoutAlgorithm::FastHierarchy) {
+    // Set up Sugiyama Layout with Fast Hierarchy
+    ogdf::SugiyamaLayout SL;
+    SL.setRanking(new ogdf::OptimalRanking);
+    SL.setCrossMin(new ogdf::MedianHeuristic);
+
+    ogdf::FastHierarchyLayout *fhl = new ogdf::FastHierarchyLayout;
+    fhl->layerDistance(70.0);
+    fhl->nodeDistance(40.0);
+
+    SL.setLayout(fhl);
+    SL.call(GA);
   }
 
   // Sync back to custom structures (swapping X and Y back to get LTR)

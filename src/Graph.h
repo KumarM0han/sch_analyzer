@@ -40,7 +40,7 @@ enum class PortType {
   Output // Right side
 };
 
-enum class LayoutAlgorithm { Sugiyama, Orthogonal, FMMM };
+enum class LayoutAlgorithm { Sugiyama, FastHierarchy, FMMM };
 
 struct LayoutState {
   bool is_cached = false;
@@ -271,7 +271,7 @@ private:
 
 public:
   bool global_hide_all = false;
-  LayoutAlgorithm current_layout = LayoutAlgorithm::FMMM;
+  LayoutAlgorithm current_layout = LayoutAlgorithm::FastHierarchy;
   std::unordered_map<LayoutAlgorithm, LayoutState> layout_cache;
 
   Graph() {

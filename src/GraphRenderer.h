@@ -91,15 +91,22 @@ public:
         if (ImGui::MenuItem("Reset View")) {
           camera.pan = {0.0f, 0.0f};
           camera.zoom = 1.0f;
+          if (!graph.getNodes().empty()) {
+            const auto &firstNode = graph.getNodes()[0];
+            camera.pan.x =
+                -firstNode.bounds.x + ImGui::GetContentRegionAvail().x / 2.0f;
+            camera.pan.y =
+                -firstNode.bounds.y + ImGui::GetContentRegionAvail().y / 2.0f;
+          }
         }
         ImGui::Separator();
         // Layout algorithm toggle
-        bool isOrtho = (graph.current_layout == LayoutAlgorithm::Orthogonal);
-        if (ImGui::MenuItem("Orthogonal Layout", nullptr, isOrtho)) {
-          if (!graph.loadLayoutFromCache(LayoutAlgorithm::Orthogonal)) {
-            graph.current_layout = LayoutAlgorithm::Orthogonal;
+        bool isFast = (graph.current_layout == LayoutAlgorithm::FastHierarchy);
+        if (ImGui::MenuItem("Fast Hierarchy Layout", nullptr, isFast)) {
+          if (!graph.loadLayoutFromCache(LayoutAlgorithm::FastHierarchy)) {
+            graph.current_layout = LayoutAlgorithm::FastHierarchy;
             Layout::applyOGDFLayout(graph);
-            graph.saveLayoutToCache(LayoutAlgorithm::Orthogonal);
+            graph.saveLayoutToCache(LayoutAlgorithm::FastHierarchy);
           }
         }
         bool isSugi = (graph.current_layout == LayoutAlgorithm::Sugiyama);
