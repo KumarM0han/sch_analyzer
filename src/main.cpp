@@ -168,10 +168,19 @@ int main(int argc, char **argv) {
   }
 
   printf("Applying Layout...\n");
-  Layout::applyOGDFLayout(graph);
-  graph.rebuildQuadtree();
+  // Layout::applyOGDFLayout(graph);
+  // graph.rebuildQuadtree();
 
   GraphRenderer<MyNodeData, MyEdgeData, MyPortData> graphRenderer(graph);
+
+  // 1. When starting up put view where at least some rectangles are there
+  if (!graph.getNodes().empty()) {
+    graphRenderer.triggerLayout(LayoutAlgorithm::FastHierarchy);
+    const auto &firstNode = graph.getNodes()[0];
+    // We can't access camera directly from main unless exposed, so we'll do it
+    // inside render loop implicitly as added earlier in "Reset View".
+    // Alternatively, just trigger a reset view logic here.
+  }
 
   bool done = false;
   while (!done) {

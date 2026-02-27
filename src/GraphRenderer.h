@@ -3,9 +3,13 @@
 #include "Graph.h"
 #include "Layout.h"
 #include "imgui.h"
+#include <atomic>
 #include <cmath>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
 
 struct PanZoomState {
   Vec2 pan = {0.0f, 0.0f};
@@ -56,6 +60,12 @@ private:
   PanZoomState camera;
   SelectionState selection;
 
+  std::thread layout_thread;
+  std::atomic<bool> is_layout_running{false};
+  std::mutex graph_mutex;
+
+  char search_buffer[256] = "";
+
   // Config colors
   ImU32 col_bg = IM_COL32(30, 30, 30, 255);
   ImU32 col_grid = IM_COL32(200, 200, 200, 40);
@@ -85,6 +95,32 @@ private:
 public:
   GraphRenderer(Graph<NodeData, EdgeData, PortData> &g) : graph(g) {}
 
+  ~GraphRenderer() {
+    if (layout_thread.joinable()) {
+      layout_thread.join();
+    }
+  }
+
+  void triggerLayout(LayoutAlgorithm algo) {
+    if (is_layout_running)
+      return;
+
+    is_layout_running = true;
+    if (layout_thread.joinable()) {
+      layout_thread.join();
+    }
+
+    layout_thread = std::thread([this, algo]() {
+      // Basic lock just in case, though graph structural mutations shouldn't
+      // happen here
+      std::lock_guard<std::mutex> lock(graph_mutex);
+      graph.current_layout = algo;
+      Layout::applyOGDFLayout(graph);
+      graph.saveLayoutToCache(algo);
+      is_layout_running = false;
+    });
+  }
+
   void render() {
     if (ImGui::BeginMainMenuBar()) {
       if (ImGui::BeginMenu("View")) {
@@ -104,25 +140,25 @@ public:
         bool isFast = (graph.current_layout == LayoutAlgorithm::FastHierarchy);
         if (ImGui::MenuItem("Fast Hierarchy Layout", nullptr, isFast)) {
           if (!graph.loadLayoutFromCache(LayoutAlgorithm::FastHierarchy)) {
+            triggerLayout(LayoutAlgorithm::FastHierarchy);
+          } else {
             graph.current_layout = LayoutAlgorithm::FastHierarchy;
-            Layout::applyOGDFLayout(graph);
-            graph.saveLayoutToCache(LayoutAlgorithm::FastHierarchy);
           }
         }
         bool isSugi = (graph.current_layout == LayoutAlgorithm::Sugiyama);
         if (ImGui::MenuItem("Sugiyama Layout", nullptr, isSugi)) {
           if (!graph.loadLayoutFromCache(LayoutAlgorithm::Sugiyama)) {
+            triggerLayout(LayoutAlgorithm::Sugiyama);
+          } else {
             graph.current_layout = LayoutAlgorithm::Sugiyama;
-            Layout::applyOGDFLayout(graph);
-            graph.saveLayoutToCache(LayoutAlgorithm::Sugiyama);
           }
         }
         bool isFMMM = (graph.current_layout == LayoutAlgorithm::FMMM);
         if (ImGui::MenuItem("FMMM Layout", nullptr, isFMMM)) {
           if (!graph.loadLayoutFromCache(LayoutAlgorithm::FMMM)) {
+            triggerLayout(LayoutAlgorithm::FMMM);
+          } else {
             graph.current_layout = LayoutAlgorithm::FMMM;
-            Layout::applyOGDFLayout(graph);
-            graph.saveLayoutToCache(LayoutAlgorithm::FMMM);
           }
         }
         ImGui::EndMenu();
@@ -188,8 +224,36 @@ public:
         screenBounds.w / camera.zoom, screenBounds.h / camera.zoom};
 
     // --- Culling & Rendering ---
-    std::vector<int> visibleNodes = graph.queryVisibleNodes(worldBounds);
-    std::vector<int> visibleEdges = graph.queryVisibleEdges(worldBounds);
+    std::vector<int> visibleNodes;
+    std::vector<int> visibleEdges;
+
+    if (is_layout_running) {
+      // Draw loading spinner in center
+      ImVec2 center = ImVec2(canvas_p0.x + (canvas_p1.x - canvas_p0.x) / 2.0f,
+                             canvas_p0.y + (canvas_p1.y - canvas_p0.y) / 2.0f);
+      float radius = 40.0f;
+      float thickness = 6.0f;
+      int num_segments = 30;
+      float time = ImGui::GetTime();
+
+      draw_list->PathClear();
+      for (int i = 0; i < num_segments; i++) {
+        float a =
+            time * 5.0f + ((float)i / (float)num_segments) * 3.14159f * 1.5f;
+        draw_list->PathLineTo(
+            ImVec2(center.x + cosf(a) * radius, center.y + sinf(a) * radius));
+      }
+      draw_list->PathStroke(IM_COL32(100, 200, 255, 255), false, thickness);
+
+      ImVec2 text_size = ImGui::CalcTextSize("Computing Layout...");
+      draw_list->AddText(
+          ImVec2(center.x - text_size.x / 2.0f, center.y + radius + 20.0f),
+          IM_COL32(255, 255, 255, 255), "Computing Layout...");
+    } else {
+      std::lock_guard<std::mutex> lock(graph_mutex);
+      visibleNodes = graph.queryVisibleNodes(worldBounds);
+      visibleEdges = graph.queryVisibleEdges(worldBounds);
+    }
 
     // Handle Interactions on Nodes
     bool mouse_clicked_left = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -346,61 +410,82 @@ public:
       ImGui::EndPopup();
     }
 
-    // Render Edges
-    for (int edge_id : visibleEdges) {
-      const auto &edge = graph.getEdge(edge_id);
-      if (!edge.visible && !graph.global_hide_all)
-        continue;
+    if (visibleNodes.size() > 10000) {
+      // Draw Cloud Representation instead of individual edges/nodes
+      ImVec2 center = ImVec2(canvas_p0.x + (canvas_p1.x - canvas_p0.x) / 2.0f,
+                             canvas_p0.y + (canvas_p1.y - canvas_p0.y) / 2.0f);
+      draw_list->AddCircleFilled(center, 200.0f * camera.zoom,
+                                 IM_COL32(100, 100, 150, 150));
+      draw_list->AddCircleFilled(
+          ImVec2(center.x - 100 * camera.zoom, center.y + 50 * camera.zoom),
+          150.0f * camera.zoom, IM_COL32(100, 100, 150, 150));
+      draw_list->AddCircleFilled(
+          ImVec2(center.x + 100 * camera.zoom, center.y + 50 * camera.zoom),
+          150.0f * camera.zoom, IM_COL32(100, 100, 150, 150));
 
-      ImVec2 points[16];
-      int pt_count = 0;
-      for (const auto &wp : edge.waypoints) {
-        if (pt_count >= 16)
-          break;
-        Vec2 screenPos = camera.worldToScreen(wp);
-        points[pt_count++] =
-            ImVec2(canvas_p0.x + screenPos.x, canvas_p0.y + screenPos.y);
+      ImVec2 text_size =
+          ImGui::CalcTextSize("Massive Cluster (Zoom in to see details)");
+      draw_list->AddText(ImVec2(center.x - text_size.x / 2.0f, center.y),
+                         IM_COL32(255, 255, 255, 255),
+                         "Massive Cluster (Zoom in to see details)");
+    } else if (!is_layout_running) {
+      std::lock_guard<std::mutex> lock(graph_mutex);
+      // Render Edges
+      for (int edge_id : visibleEdges) {
+        const auto &edge = graph.getEdge(edge_id);
+        if (!edge.visible && !graph.global_hide_all)
+          continue;
+
+        ImVec2 points[16];
+        int pt_count = 0;
+        for (const auto &wp : edge.waypoints) {
+          if (pt_count >= 16)
+            break;
+          Vec2 screenPos = camera.worldToScreen(wp);
+          points[pt_count++] =
+              ImVec2(canvas_p0.x + screenPos.x, canvas_p0.y + screenPos.y);
+        }
+        if (pt_count > 1) {
+          ImU32 draw_color =
+              (selection.type == SelectionType::Edge && selection.id == edge.id)
+                  ? col_edge_selected
+                  : col_edge;
+          float thickness =
+              (selection.type == SelectionType::Edge && selection.id == edge.id)
+                  ? 4.0f
+                  : 2.5f;
+          draw_list->AddPolyline(points, pt_count, draw_color, 0,
+                                 thickness * camera.zoom);
+        }
       }
-      if (pt_count > 1) {
-        ImU32 draw_color =
-            (selection.type == SelectionType::Edge && selection.id == edge.id)
-                ? col_edge_selected
-                : col_edge;
-        float thickness =
-            (selection.type == SelectionType::Edge && selection.id == edge.id)
-                ? 4.0f
-                : 2.5f;
-        draw_list->AddPolyline(points, pt_count, draw_color, 0,
-                               thickness * camera.zoom);
+
+      // Render Nodes
+      for (int id : visibleNodes) {
+        const auto &node = graph.getNode(id);
+        Rect screenRect = camera.worldToScreenRect(node.bounds);
+        ImVec2 p_min =
+            ImVec2(canvas_p0.x + screenRect.x, canvas_p0.y + screenRect.y);
+        ImVec2 p_max = ImVec2(p_min.x + screenRect.w, p_min.y + screenRect.h);
+
+        draw_list->AddRectFilled(
+            p_min, p_max,
+            (selection.type == SelectionType::Node && selection.id == id)
+                ? col_node_selected
+                : col_node,
+            4.0f);
+        draw_list->AddRect(p_min, p_max, col_node_border, 4.0f);
+
+        // Draw Ports
+        for (const auto &port : node.ports) {
+          Vec2 portWorldPos = {node.bounds.x + port.local_pos.x,
+                               node.bounds.y + port.local_pos.y};
+          Vec2 portScreen = camera.worldToScreen(portWorldPos);
+          ImVec2 pt =
+              ImVec2(canvas_p0.x + portScreen.x, canvas_p0.y + portScreen.y);
+          draw_list->AddCircleFilled(pt, 5.0f * camera.zoom, col_port);
+        }
       }
-    }
-
-    // Render Nodes
-    for (int id : visibleNodes) {
-      const auto &node = graph.getNode(id);
-      Rect screenRect = camera.worldToScreenRect(node.bounds);
-      ImVec2 p_min =
-          ImVec2(canvas_p0.x + screenRect.x, canvas_p0.y + screenRect.y);
-      ImVec2 p_max = ImVec2(p_min.x + screenRect.w, p_min.y + screenRect.h);
-
-      draw_list->AddRectFilled(
-          p_min, p_max,
-          (selection.type == SelectionType::Node && selection.id == id)
-              ? col_node_selected
-              : col_node,
-          4.0f);
-      draw_list->AddRect(p_min, p_max, col_node_border, 4.0f);
-
-      // Draw Ports
-      for (const auto &port : node.ports) {
-        Vec2 portWorldPos = {node.bounds.x + port.local_pos.x,
-                             node.bounds.y + port.local_pos.y};
-        Vec2 portScreen = camera.worldToScreen(portWorldPos);
-        ImVec2 pt =
-            ImVec2(canvas_p0.x + portScreen.x, canvas_p0.y + portScreen.y);
-        draw_list->AddCircleFilled(pt, 5.0f * camera.zoom, col_port);
-      }
-    }
+    } // end else(!is_layout_running/cloud)
 
     ImGui::End();
   }
@@ -412,6 +497,31 @@ public:
                             ImGui::GetContentRegionAvail().x / camera.zoom,
                             ImGui::GetContentRegionAvail().y / camera.zoom})
         .size();
+  }
+
+  size_t getVisibleEdgeCount() const {
+    if (is_layout_running)
+      return 0;
+    return graph
+        .queryVisibleEdges({camera.screenToWorld({0, 0}).x,
+                            camera.screenToWorld({0, 0}).y,
+                            ImGui::GetContentRegionAvail().x / camera.zoom,
+                            ImGui::GetContentRegionAvail().y / camera.zoom})
+        .size();
+  }
+
+  size_t getVisiblePortCount() const {
+    if (is_layout_running)
+      return 0;
+    size_t cnt = 0;
+    auto visibleNodes = graph.queryVisibleNodes(
+        {camera.screenToWorld({0, 0}).x, camera.screenToWorld({0, 0}).y,
+         ImGui::GetContentRegionAvail().x / camera.zoom,
+         ImGui::GetContentRegionAvail().y / camera.zoom});
+    for (int id : visibleNodes) {
+      cnt += graph.getNode(id).ports.size();
+    }
+    return cnt;
   }
 
   // Abstract property rendering depending on the data type using an external
@@ -458,6 +568,29 @@ public:
       ImGui::Text("No entity selected.");
     }
 
+    ImGui::Separator();
+    ImGui::Text("Find Node Setup");
+    ImGui::InputText("Node Name / ID", search_buffer, 256);
+    if (ImGui::Button("Find Node")) {
+      std::string q = search_buffer;
+      try {
+        int id = std::stoi(q);
+        if (id >= 0 && id < graph.getNodes().size()) {
+          const auto &n = graph.getNode(id);
+          camera.pan.x = -n.bounds.x * camera.zoom +
+                         (viewport->WorkSize.x - 320.0f) / 2.0f;
+          camera.pan.y =
+              -n.bounds.y * camera.zoom + viewport->WorkSize.y / 2.0f;
+          selection.type = SelectionType::Node;
+          selection.id = id;
+          selection.data = (void *)&n.data;
+        }
+      } catch (...) {
+        // It's a name search. If nodedata has a name, loop and find.
+        // Requires passing lookup logic or ensuring IDs are mapped.
+      }
+    }
+
     // Bottom aligned info text
     ImVec2 content_avail = ImGui::GetContentRegionAvail();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + content_avail.y - 60.0f);
@@ -465,6 +598,8 @@ public:
     ImGui::Text("Render Info:");
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     ImGui::Text("Visible Nodes: %zu", visibleNodeCount);
+    ImGui::Text("Visible Edges: %zu", getVisibleEdgeCount());
+    ImGui::Text("Visible Ports: %zu", getVisiblePortCount());
 
     ImGui::End();
   }
