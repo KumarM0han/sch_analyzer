@@ -10,7 +10,6 @@
 #include <thread>
 #include <vector>
 
-
 struct PanZoomState {
   Vec2 pan = {0.0f, 0.0f};
   float zoom = 1.0f;
@@ -76,7 +75,9 @@ private:
   ImU32 col_edge = IM_COL32(170, 170, 170, 255);
   ImU32 col_edge_selected = IM_COL32(255, 100, 50, 255);
 
-  bool isDraggingEmpty = false;
+  bool isSelectingRegion = false;
+  ImVec2 regionSelectStart = {0.0f, 0.0f};
+  ImVec2 regionSelectEnd = {0.0f, 0.0f};
 
   void drawGrid(ImDrawList *draw_list, ImVec2 canvas_pos, ImVec2 canvas_size) {
     float GRID_STEP = 64.0f * camera.zoom;
@@ -195,12 +196,38 @@ public:
       camera.pan.y += io.MouseDelta.y;
     }
 
-    if (isDraggingEmpty) {
+    if (isSelectingRegion) {
       if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        camera.pan.x += io.MouseDelta.x;
-        camera.pan.y += io.MouseDelta.y;
+        regionSelectEnd = {io.MousePos.x - canvas_p0.x,
+                           io.MousePos.y - canvas_p0.y};
+
+        ImVec2 p_min = ImVec2(
+            canvas_p0.x + std::min(regionSelectStart.x, regionSelectEnd.x),
+            canvas_p0.y + std::min(regionSelectStart.y, regionSelectEnd.y));
+        ImVec2 p_max = ImVec2(
+            canvas_p0.x + std::max(regionSelectStart.x, regionSelectEnd.x),
+            canvas_p0.y + std::max(regionSelectStart.y, regionSelectEnd.y));
+        draw_list->AddRectFilled(p_min, p_max, IM_COL32(100, 150, 250, 80));
+        draw_list->AddRect(p_min, p_max, IM_COL32(100, 150, 250, 200));
       } else {
-        isDraggingEmpty = false; // Stop dragging when mouse released
+        isSelectingRegion = false;
+        float rw = std::abs(regionSelectEnd.x - regionSelectStart.x);
+        float rh = std::abs(regionSelectEnd.y - regionSelectStart.y);
+        if (rw > 10.0f && rh > 10.0f) {
+          float canvas_w = canvas_p1.x - canvas_p0.x;
+          float canvas_h = canvas_p1.y - canvas_p0.y;
+          float zoom_x = canvas_w / rw;
+          float zoom_y = canvas_h / rh;
+          float zoom_factor = std::min(zoom_x, zoom_y);
+
+          Vec2 world_center = camera.screenToWorld(
+              {(regionSelectStart.x + regionSelectEnd.x) / 2.0f,
+               (regionSelectStart.y + regionSelectEnd.y) / 2.0f});
+
+          camera.zoom *= zoom_factor;
+          camera.pan.x = canvas_w / 2.0f - world_center.x * camera.zoom;
+          camera.pan.y = canvas_h / 2.0f - world_center.y * camera.zoom;
+        }
       }
     }
 
@@ -253,6 +280,60 @@ public:
       std::lock_guard<std::mutex> lock(graph_mutex);
       visibleNodes = graph.queryVisibleNodes(worldBounds);
       visibleEdges = graph.queryVisibleEdges(worldBounds);
+
+      // Hierarchy filtering
+      std::vector<int> filteredNodes;
+      for (int id : visibleNodes) {
+        bool is_visible = true;
+        int curr_id = id;
+        while (true) {
+          const auto &n = graph.getNode(curr_id);
+          if (n.parent_id == -1)
+            break;
+          const auto &parent = graph.getNode(n.parent_id);
+          if (!parent.is_expanded) {
+            is_visible = false;
+            break;
+          }
+          curr_id = parent.id;
+        }
+        if (is_visible)
+          filteredNodes.push_back(id);
+      }
+      visibleNodes = filteredNodes;
+
+      std::vector<int> filteredEdges;
+      for (int edge_id : visibleEdges) {
+        const auto &edge = graph.getEdge(edge_id);
+        bool src_v = true, dst_v = true;
+        int curr_id = edge.src_node_id;
+        while (curr_id != -1) {
+          const auto &n = graph.getNode(curr_id);
+          if (n.parent_id == -1)
+            break;
+          const auto &parent = graph.getNode(n.parent_id);
+          if (!parent.is_expanded) {
+            src_v = false;
+            break;
+          }
+          curr_id = parent.id;
+        }
+        curr_id = edge.dst_node_id;
+        while (curr_id != -1) {
+          const auto &n = graph.getNode(curr_id);
+          if (n.parent_id == -1)
+            break;
+          const auto &parent = graph.getNode(n.parent_id);
+          if (!parent.is_expanded) {
+            dst_v = false;
+            break;
+          }
+          curr_id = parent.id;
+        }
+        if (src_v && dst_v)
+          filteredEdges.push_back(edge_id);
+      }
+      visibleEdges = filteredEdges;
     }
 
     // Handle Interactions on Nodes
@@ -319,6 +400,9 @@ public:
             selection.id = id;
             selection.data = (void *)&node.data;
             entityClicked = true;
+            if (mouse_clicked_right) {
+              ImGui::OpenPopup("NodeContextMenu");
+            }
             break;
           }
         }
@@ -351,9 +435,10 @@ public:
         }
       }
 
-      if (!entityClicked && is_hovered &&
-          ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        isDraggingEmpty = true;
+      if (!entityClicked && is_hovered && mouse_clicked_left) {
+        isSelectingRegion = true;
+        regionSelectStart = ImVec2(mouse_pos.x, mouse_pos.y);
+        regionSelectEnd = ImVec2(mouse_pos.x, mouse_pos.y);
       }
     }
 
@@ -405,6 +490,61 @@ public:
 
         if (!has_links) {
           ImGui::TextDisabled("No connected edges.");
+        }
+
+        ImGui::Separator();
+        if (ImGui::MenuItem("Load Trace")) {
+          // Placeholder hook
+          printf("Action: Load Trace for Port ID %d\n", selection.id);
+        }
+        if (ImGui::MenuItem("Load Trace Driver")) {
+          // Placeholder hook
+          printf("Action: Load Trace Driver for Port ID %d\n", selection.id);
+        }
+        if (ImGui::BeginMenu("FanIn")) {
+          if (ImGui::MenuItem("Level/Depth/Till Primaries")) {
+            printf("Action: FanIn Till Primaries for Port ID %d\n",
+                   selection.id);
+          }
+          if (ImGui::MenuItem("Stop at Flops")) {
+            printf("Action: FanIn Stop at Flops for Port ID %d\n",
+                   selection.id);
+          }
+          if (ImGui::MenuItem("Stop at Memories")) {
+            printf("Action: FanIn Stop at Memories for Port ID %d\n",
+                   selection.id);
+          }
+          ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("FanOut")) {
+          if (ImGui::MenuItem("Level/Depth/Till Primaries")) {
+            printf("Action: FanOut Till Primaries for Port ID %d\n",
+                   selection.id);
+          }
+          if (ImGui::MenuItem("Stop at Flops")) {
+            printf("Action: FanOut Stop at Flops for Port ID %d\n",
+                   selection.id);
+          }
+          if (ImGui::MenuItem("Stop at Memories")) {
+            printf("Action: FanOut Stop at Memories for Port ID %d\n",
+                   selection.id);
+          }
+          ImGui::EndMenu();
+        }
+      }
+      ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopup("NodeContextMenu")) {
+      if (selection.type == SelectionType::Node) {
+        auto &node = graph.getNode(selection.id);
+        if (node.is_hierarchy) {
+          if (ImGui::MenuItem(node.is_expanded ? "Collapse Hierarchy"
+                                               : "Expand Hierarchy")) {
+            node.is_expanded = !node.is_expanded;
+          }
+        } else {
+          ImGui::TextDisabled("No Actions");
         }
       }
       ImGui::EndPopup();
@@ -467,13 +607,30 @@ public:
             ImVec2(canvas_p0.x + screenRect.x, canvas_p0.y + screenRect.y);
         ImVec2 p_max = ImVec2(p_min.x + screenRect.w, p_min.y + screenRect.h);
 
-        draw_list->AddRectFilled(
-            p_min, p_max,
-            (selection.type == SelectionType::Node && selection.id == id)
-                ? col_node_selected
-                : col_node,
-            4.0f);
-        draw_list->AddRect(p_min, p_max, col_node_border, 4.0f);
+        if (node.is_hierarchy) {
+          if (node.is_expanded) {
+            draw_list->AddRectFilled(p_min, p_max, IM_COL32(50, 60, 80, 150),
+                                     4.0f);
+            draw_list->AddRect(p_min, p_max, IM_COL32(100, 150, 200, 255),
+                               4.0f);
+          } else {
+            draw_list->AddRectFilled(
+                p_min, p_max,
+                (selection.type == SelectionType::Node && selection.id == id)
+                    ? col_node_selected
+                    : IM_COL32(70, 90, 120, 255),
+                4.0f);
+            draw_list->AddRect(p_min, p_max, col_node_border, 4.0f);
+          }
+        } else {
+          draw_list->AddRectFilled(
+              p_min, p_max,
+              (selection.type == SelectionType::Node && selection.id == id)
+                  ? col_node_selected
+                  : col_node,
+              4.0f);
+          draw_list->AddRect(p_min, p_max, col_node_border, 4.0f);
+        }
 
         // Draw Ports
         for (const auto &port : node.ports) {

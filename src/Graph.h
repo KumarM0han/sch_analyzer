@@ -90,6 +90,12 @@ public:
   bool visible;
   std::vector<Port<NodeData, EdgeData, PortData>> ports;
 
+  // Hierarchy
+  bool is_hierarchy = false;
+  bool is_expanded = false;
+  int parent_id = -1;
+  std::vector<int> children;
+
   Node(int id, Rect bounds, const NodeData &data)
       : id(id), bounds(bounds), data(data), visible(true) {}
 
